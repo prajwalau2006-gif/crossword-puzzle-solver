@@ -1,0 +1,306 @@
+
+
+===== PAGE 1 =====
+
+Crossword  Puzzle  Solver  —  Phase  1  PPT  
+Content
+ 
+ 
+Problem  Topic  
+Crossword  Puzzle  Solver  using  Backtracking  and  
+Constraint
+ 
+Satisfaction
+ 
+Problem
+ 
+(CSP)
+  
+1.  Introduction  
+●  Crossword  puzzles  involve  filling  words  into  a  grid  while  satisfying  multiple  conditions  
+and
+ 
+intersections.
+ ●  As  the  crossword  size  increases,  the  number  of  possible  word  arrangements  grows  
+rapidly.
+ ●  Efficient  algorithms  are  required  to  reduce  unnecessary  computations  and  solve  the  
+puzzle
+ 
+correctly.
+ ●  The  problem  naturally  fits  recursive  search  and  constraint-based  optimization  
+techniques.
+ 
+ 
+2.  Problem  Statement  
+●  To  design  a  system  that  automatically  solves  a  crossword  puzzle  by  correctly  filling  
+all
+ 
+slots
+ 
+while
+ 
+satisfying
+ 
+all
+ 
+given
+ 
+constraints.
+ 
+ 
+3.  Algorithmic  Techniques  Applicable  to  
+the
+ 
+Problem
+ 
+1.  Brute  Force  Technique  
+
+===== PAGE 2 =====
+
+●  Tries  every  possible  word  arrangement  for  all  slots.  ●  Simple  to  implement  but  computationally  expensive  due  to  exhaustive  exploration.  
+ 
+2.  Backtracking  Technique  
+●  Recursively  places  words  and  backtracks  whenever  an  invalid  placement  is  detected.  ●  Reduces  unnecessary  exploration  compared  to  brute  force.  
+ 
+3.  Constraint  Satisfaction  Problem  (CSP)  Technique  
+●  Models  crossword  slots  as  variables  and  candidate  words  as  domains.  ●  Uses  constraints  to  eliminate  invalid  assignments  during  solving.  
+ 
+4.  Greedy  Technique  
+●  Chooses  the  locally  best  word  or  slot  at  each  step.  ●  Faster  in  some  cases  but  may  fail  to  produce  a  valid  complete  solution.  
+ 
+5.  Graph-Based  Technique  
+●  Represents  crossword  intersections  as  relationships  between  connected  nodes.  ●  Useful  for  modeling  dependencies  between  slots  and  intersections.  
+ 
+4.  Selected  Technique  
+Selected  Technique:  
+Backtracking  +  Constraint  Satisfaction  Problem  (CSP)  
+Reason  for  Selection  
+●  Crossword  solving  requires  recursive  trial-and-error  exploration.  ●  Multiple  interdependent  constraints  must  be  satisfied  simultaneously.  
+
+===== PAGE 3 =====
+
+●  CSP  enables  efficient  pruning  of  invalid  assignments.  ●  Backtracking  guarantees  a  complete  and  correct  solution  if  one  exists.  
+ 
+5.  Algorithms  Analyzed  Under  Selected  
+Technique
+ 
+1.  Plain  Brute  Force  Search  
+Working  
+●  Every  slot  tries  every  possible  word  without  early  validation.  ●  Constraints  are  checked  only  after  complete  assignments  are  formed.  
+Time  Complexity  Analysis  
+Let:  
+●  n  =  number  of  crossword  slots  ●  m  =  number  of  candidate  words  
+For  each  slot:  
+●  m  possible  choices  
+Total  combinations:  
+T(n)  =  m  ×  m  ×  m  ...  (n  times)  
+T(n)  =  m^n  
+Complexities  
+●  Worst  Case:  
+O(m^n)
+ ●  Average  Case:  
+Θ(
+m^n)
+ ●  Best  Case:  
+Ω(
+m^n)
+ 
+Space  Complexity  
+●  O(n)  
+
+===== PAGE 4 =====
+
+Limitation  
+●  Explores  almost  the  entire  search  space.  ●  Computationally  infeasible  for  large  puzzles.  
+ 
+2.  Recursive  Backtracking  
+Working  
+●  Places  words  recursively.  ●  If  a  constraint  fails,  the  algorithm  immediately  backtracks.  
+Improvement  Over  Brute  Force  
+●  Invalid  branches  are  rejected  during  recursion  itself.  
+Time  Complexity  
+Worst  Case:  
+●  O(m^n)  
+Average  Case:  
+●  Better  than  brute  force  due  to  pruning.  
+Best  Case:  
+●  Ω( n)  
+Space  Complexity  
+●  O(n)  
+Limitation  
+●  Still  explores  many  unnecessary  recursive  states.  
+ 
+3.  CSP  with  Constraint  Checking  
+Working  
+
+===== PAGE 5 =====
+
+●  Crossword  is  modeled  as  a  Constraint  Satisfaction  Problem.  ●  Constraints  are  validated  during  every  word  assignment.  
+Constraints  Used  
+●  Word  length  matching  ●  Character  consistency  at  intersections  ●  Unique  word  usage  
+Improvement  
+●  Invalid  assignments  are  eliminated  earlier.  ●  Reduces  recursive  exploration  significantly.  
+Time  Complexity  
+Worst  Case:  
+●  O(m^n)  
+Average  Case:  
+●  Reduced  practical  search  space.  
+Best  Case:  
+●  Ω( n)  
+Space  Complexity  
+●  O(n)  
+Limitation  
+●  Only  current  assignments  are  validated.  ●  Future  conflicts  are  not  predicted  early.  
+ 
+4.  CSP  with  Forward  Checking  (Final  
+Selected
+ 
+Algorithm)
+ 
+Working  
+●  After  assigning  a  word:  ○  future  slot  domains  are  updated  
+
+===== PAGE 6 =====
+
+○  impossible  future  assignments  are  removed  immediately  
+Improvement  
+●  Detects  future  failures  before  deeper  recursion  occurs.  ●  Reduces  effective  branching  factor.  
+Let:  
+●  effective  branching  factor  after  pruning  =  k  ●  where  k  <  m  
+Then  effective  search  becomes:  
+T(n)  =  k^n  
+Time  Complexity  
+Worst  Case:  
+●  O(m^n)  
+Average  Case:  
+●  Θ( k^n),  where  k  <  m  
+Best  Case:  
+●  Ω( n)  
+Space  Complexity  
+●  O(nm)  
+Advantage  
+●  Strong  pruning  of  invalid  recursive  branches.  ●  Much  smaller  practical  search  space.  
+ 
+6.  Final  Selected  Algorithm  
+Backtracking  +  CSP  +  Forward  Checking  
+Reason  for  Final  Selection  
+
+===== PAGE 7 =====
+
+●  Efficient  recursive  exploration  ●  Early  pruning  of  invalid  states  ●  Reduced  practical  runtime  ●  Better  handling  of  crossword  intersections  and  constraints  ●  More  optimized  than  brute  force  and  basic  backtracking  
+ 
+7.  Detailed  Methodology  
+Step  1  —  Grid  Representation  
+●  Represent  the  crossword  puzzle  as  a  2D  matrix.  ●  Empty  cells  represent  slots  to  be  filled.  ●  Blocked  cells  are  marked  separately.  
+ 
+Step  2  —  Slot  Detection  
+●  Detect  all  horizontal  and  vertical  word  slots.  ●  Store:  ○  starting  position  ○  direction  ○  slot  length  
+ 
+Step  3  —  CSP  Modeling  
+Variables  
+●  Each  crossword  slot  becomes  a  variable.  
+Domains  
+●  Possible  candidate  words  for  each  slot.  
+Constraints  
+●  Word  length  must  match  slot  length.  ●  Intersecting  letters  must  match.  ●  A  word  cannot  be  reused.  
+ 
+
+===== PAGE 8 =====
+
+Step  4  —  Domain  Filtering  
+●  Before  recursion:  ○  filter  words  based  on  slot  length.  ●  This  reduces  unnecessary  candidate  words  initially.  
+ 
+Step  5  —  Recursive  Backtracking  
+●  Select  an  unfilled  slot.  ●  Try  placing  valid  words  recursively.  ●  After  each  placement:  ○  validate  all  constraints.  
+ 
+Step  6  —  Constraint  Validation  
+●  Check:  ○  intersection  consistency  ○  duplicate  word  usage  ○  slot  compatibility  ●  If  constraints  fail:  ○  reject  assignment  immediately  ○  backtrack  to  previous  state  
+ 
+Step  7  —  Forward  Checking  
+●  After  assigning  a  word:  ○  update  future  slot  domains.  ●  Remove  words  that  can  no  longer  satisfy  future  constraints.  
+Example:  
+●  If  an  intersection  requires  letter  ‘A’  at  index  2,  
+remove
+ 
+all
+ 
+future
+ 
+words
+ 
+not
+ 
+containing
+ 
+‘A’
+ 
+at
+ 
+that
+ 
+position.
+ 
+ 
+Step  8  —  Recursive  Pruning  
+●  If  any  future  slot  domain  becomes  empty:  ○  terminate  that  recursive  branch  immediately.  
+
+===== PAGE 9 =====
+
+●  Prevents  unnecessary  deeper  exploration.  
+ 
+Step  9  —  Continue  Until  Completion  
+●  Repeat  recursive  assignment  and  pruning  until:  ○  all  slots  are  filled  correctly  
+OR
+ ○  no  valid  solution  exists.  
+ 
+8.  Detailed  Explanation  of  Constraint  
+Optimization
+ 
+Optimization  Goal  
+●  Reduce  unnecessary  recursive  exploration.  ●  Reduce  effective  search  space.  ●  Avoid  exploring  impossible  assignments.  
+ 
+Optimization  Through  Constraint  Checking  
+1.  Word  Length  Filtering  
+●  Only  words  matching  slot  length  are  considered.  ●  Eliminates  many  invalid  candidates  immediately.  
+ 
+2.  Intersection  Constraint  Optimization  
+●  Intersecting  slots  must  contain  identical  characters  at  shared  cells.  ●  Invalid  placements  are  rejected  instantly  during  recursion.  
+ 
+3.  Unique  Word  Constraint  
+●  Prevents  reuse  of  already  assigned  words.  ●  Reduces  duplicate  recursive  states.  
+
+===== PAGE 10 =====
+
+ 
+Optimization  Through  Forward  Checking  
+Working  
+●  After  placing  a  word:  ○  future  slot  domains  are  updated  immediately.  
+Effect  
+●  Impossible  future  assignments  are  removed  before  recursion  continues.  
+Benefit  
+●  Prevents  deep  recursive  exploration  of  invalid  states.  
+ 
+Optimization  Through  Recursive  Pruning  
+Working  
+●  If  any  future  slot  has  no  valid  words  remaining:  ○  terminate  that  branch  immediately.  
+Benefit  
+●  Avoids  unnecessary  recursive  calls.  
+ 
+Effective  Branching  Factor  Reduction  
+Without  optimization:  
+●  Each  slot  may  try  m  words.  
+Search  space:  
+●  m^n  
+After  constraint  pruning:  
+●  effective  valid  choices  reduce  to  k  
+where:  
+
+===== PAGE 11 =====
+
+●  k  <  m  
+New  effective  search:  
+●  k^n  
+ 
+Final  Optimization  Outcome  
+●  Reduced  practical  runtime  ●  Reduced  recursive  calls  ●  Smaller  explored  search  tree  ●  Faster  crossword  solving  compared  to  brute  force  approaches  
+ 
