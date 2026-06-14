@@ -5,3 +5,7 @@ dist/
 coverage/
 *.log
 *.tsbuildinfo
+__pycache__/
+*.pyc
+.venv/
+venv/

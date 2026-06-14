@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Grid = string[][];
+interface Position {
+  row: number;
+  column: number;
+}
 type Algorithm =
   | "brute-force"
   | "backtracking"
-  | "csp"
-  | "forward-checking";
+  | "backtracking-fc"
+  | "backtracking-fc-mrv";
 
 interface Puzzle {
   id: string;
@@ -14,6 +18,7 @@ interface Puzzle {
   concept: string;
   grid: Grid;
   words: string[];
+  theme?: string;
 }
 
 interface Statistics {
@@ -58,26 +63,26 @@ const algorithmDetails: Record<
   { label: string; description: string; time: string; space: string }
 > = {
   "brute-force": {
-    label: "Brute force",
-    description: "Fixed slot order; checks constraints only after all n slots are filled.",
+    label: "Plain Brute Force",
+    description: "Fixed slot order; checks constraints only after all slots are filled.",
     time: "O(mⁿ)",
     space: "O(n)",
   },
   backtracking: {
-    label: "Backtracking",
-    description: "Prunes on constraint violation immediately; no domain copies needed.",
+    label: "Recursive Backtracking",
+    description: "Fixed slot order; checks intersections per assignment, rolls back on violation.",
     time: "O(mⁿ) worst case",
     space: "O(n)",
   },
-  csp: {
-    label: "CSP + MRV",
-    description: "Picks the slot with fewest candidates first; domains stored read-only.",
-    time: "O(mⁿ) worst case",
-    space: "O(n·m)",
+  "backtracking-fc": {
+    label: "Backtracking + Forward Checking",
+    description: "Fixed slot order; prunes neighboring domains immediately, backtracks on empty domain.",
+    time: "O(mⁿ) worst, O(kⁿ) typical",
+    space: "O(n²·m)",
   },
-  "forward-checking": {
-    label: "CSP + Forward Checking",
-    description: "Clones and prunes domains after each assignment; n copies on the call stack.",
+  "backtracking-fc-mrv": {
+    label: "Backtracking + Forward Checking + MRV",
+    description: "Dynamic MRV slot ordering; prunes neighboring domains immediately.",
     time: "O(mⁿ) worst, O(kⁿ) typical",
     space: "O(n²·m)",
   },
@@ -104,7 +109,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState("");
   const [grid, setGrid] = useState<Grid>([]);
   const [wordsText, setWordsText] = useState("");
-  const [algorithm, setAlgorithm] = useState<Algorithm>("forward-checking");
+  const [algorithm, setAlgorithm] = useState<Algorithm>("backtracking-fc-mrv");
   const [result, setResult] = useState<SolveResult | null>(null);
   const [comparison, setComparison] = useState<Comparison[]>([]);
   const [stepIndex, setStepIndex] = useState(0);
@@ -116,6 +121,37 @@ export function App() {
   const [genSize, setGenSize] = useState(5);
   const [manualSize, setManualSize] = useState(10);
   const [uploadSuccess, setUploadSuccess] = useState("");
+  const [predefinedTheme, setPredefinedTheme] = useState<string>("All");
+  const [genTheme, setGenTheme] = useState<string>("General CS");
+  const [currentPuzzle, setCurrentPuzzle] = useState<Puzzle | null>(null);
+  const [diagonalEnabled, setDiagonalEnabled] = useState<boolean>(false);
+  const [showRejected, setShowRejected] = useState<boolean>(false);
+  const [lastGeneratedPuzzle, setLastGeneratedPuzzle] = useState<Puzzle | null>(null);
+
+  // Rejected assignments up to the current step index (updates as slider moves)
+  const rejectedAssignments = useMemo(() => {
+    if (!result) return [];
+    const list: { word: string; slotId: string; reason: string; type: string; stepIdx: number }[] = [];
+    const seen = new Set<string>();
+    result.steps.slice(0, stepIndex + 1).forEach((step, idx) => {
+      if (step.type === "REJECT_WORD" || step.type === "BACKTRACK") {
+        if (step.word && step.slotId) {
+          const key = `${step.word}-${step.slotId}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            list.push({
+              word: step.word,
+              slotId: step.slotId,
+              reason: step.message || "Violated constraints",
+              type: step.type,
+              stepIdx: idx
+            });
+          }
+        }
+      }
+    });
+    return list;
+  }, [result, stepIndex]);
 
   const initializeBlankGrid = (size: number) => {
     const blank: Grid = Array.from({ length: size }, () => Array(size).fill(""));
@@ -125,7 +161,252 @@ export function App() {
     setComparison([]);
     setStepIndex(0);
     setError("");
+    setCurrentPuzzle(null);
   };
+
+  const getOpenCell = (targetGrid: Grid, r: number, c: number): boolean => {
+    if (r < 0 || r >= targetGrid.length || c < 0 || c >= targetGrid[0].length) return false;
+    return targetGrid[r][c] !== "#";
+  };
+
+  const collectCellsFrontend = (targetGrid: Grid, startRow: number, startCol: number, direction: string): Position[] => {
+    const cells: Position[] = [];
+    let rStep = 0;
+    let cStep = 0;
+    if (direction === "across") {
+      cStep = 1;
+    } else if (direction === "down") {
+      rStep = 1;
+    } else if (direction === "diagonal-down-right") {
+      rStep = 1;
+      cStep = 1;
+    } else if (direction === "diagonal-down-left") {
+      rStep = 1;
+      cStep = -1;
+    } else if (direction === "diagonal-up-right") {
+      rStep = -1;
+      cStep = 1;
+    } else if (direction === "diagonal-up-left") {
+      rStep = -1;
+      cStep = -1;
+    }
+
+    let r = startRow;
+    let c = startCol;
+    while (getOpenCell(targetGrid, r, c)) {
+      cells.push({ row: r, column: c });
+      r += rStep;
+      c += cStep;
+    }
+    return cells;
+  };
+
+  const detectSlotsFrontend = (targetGrid: Grid, diagonal: boolean) => {
+    const slots: any[] = [];
+    const R = targetGrid.length;
+    if (R === 0) return slots;
+    const C = targetGrid[0].length;
+
+    for (let r = 0; r < R; r++) {
+      for (let c = 0; c < C; c++) {
+        if (!getOpenCell(targetGrid, r, c)) continue;
+
+        const startsAcross = !getOpenCell(targetGrid, r, c - 1) && getOpenCell(targetGrid, r, c + 1);
+        if (startsAcross) {
+          const cells = collectCellsFrontend(targetGrid, r, c, "across");
+          if (cells.length >= 2) {
+            slots.push({
+              id: `A-${r}-${c}`,
+              direction: "across",
+              start: { row: r, column: c },
+              length: cells.length,
+              cells
+            });
+          }
+        }
+
+        const startsDown = !getOpenCell(targetGrid, r - 1, c) && getOpenCell(targetGrid, r + 1, c);
+        if (startsDown) {
+          const cells = collectCellsFrontend(targetGrid, r, c, "down");
+          if (cells.length >= 2) {
+            slots.push({
+              id: `D-${r}-${c}`,
+              direction: "down",
+              start: { row: r, column: c },
+              length: cells.length,
+              cells
+            });
+          }
+        }
+
+        if (diagonal) {
+          // DDR (↘): top-left of "\\ " path
+          const startsDDR = !getOpenCell(targetGrid, r - 1, c - 1) && getOpenCell(targetGrid, r + 1, c + 1);
+          if (startsDDR) {
+            const cells = collectCellsFrontend(targetGrid, r, c, "diagonal-down-right");
+            if (cells.length >= 2) {
+              slots.push({
+                id: `DDR-${r}-${c}`,
+                direction: "diagonal-down-right",
+                start: { row: r, column: c },
+                length: cells.length,
+                cells
+              });
+            }
+          }
+
+          // DDL (↙): top-right of "/" path
+          const startsDDL = !getOpenCell(targetGrid, r - 1, c + 1) && getOpenCell(targetGrid, r + 1, c - 1);
+          if (startsDDL) {
+            const cells = collectCellsFrontend(targetGrid, r, c, "diagonal-down-left");
+            if (cells.length >= 2) {
+              slots.push({
+                id: `DDL-${r}-${c}`,
+                direction: "diagonal-down-left",
+                start: { row: r, column: c },
+                length: cells.length,
+                cells
+              });
+            }
+          }
+
+          // DUR (↗): bottom-left of "/" path
+          const startsDUR = !getOpenCell(targetGrid, r + 1, c - 1) && getOpenCell(targetGrid, r - 1, c + 1);
+          if (startsDUR) {
+            const cells = collectCellsFrontend(targetGrid, r, c, "diagonal-up-right");
+            if (cells.length >= 2) {
+              slots.push({
+                id: `DUR-${r}-${c}`,
+                direction: "diagonal-up-right",
+                start: { row: r, column: c },
+                length: cells.length,
+                cells
+              });
+            }
+          }
+
+          // DUL (↖): bottom-right of "\\ " path
+          const startsDUL = !getOpenCell(targetGrid, r + 1, c + 1) && getOpenCell(targetGrid, r - 1, c - 1);
+          if (startsDUL) {
+            const cells = collectCellsFrontend(targetGrid, r, c, "diagonal-up-left");
+            if (cells.length >= 2) {
+              slots.push({
+                id: `DUL-${r}-${c}`,
+                direction: "diagonal-up-left",
+                start: { row: r, column: c },
+                length: cells.length,
+                cells
+              });
+            }
+          }
+        }
+      }
+    }
+    return slots;
+  };
+
+  const words = useMemo(
+    () =>
+      wordsText
+        .split(/[\s,]+/)
+        .map((word) => word.trim().toUpperCase())
+        .filter(Boolean),
+    [wordsText],
+  );
+
+  const detectedSlots = useMemo(() => {
+    const slots = detectSlotsFrontend(grid, diagonalEnabled);
+    if (!diagonalEnabled) return slots;
+    
+    // Group slots by coordinate tuple
+    const groups: Record<string, any[]> = {};
+    slots.forEach(slot => {
+      const coords = slot.cells.map((c: any) => `${c.row},${c.column}`).sort().join(";");
+      if (!groups[coords]) {
+        groups[coords] = [];
+      }
+      groups[coords].push(slot);
+    });
+
+    const filteredSlots: any[] = [];
+    Object.values(groups).forEach(slotGroup => {
+      if (slotGroup.length === 1) {
+        filteredSlots.push(slotGroup[0]);
+      } else {
+        // Find if any of the slots has candidates in the words list
+        let bestSlot = null;
+        for (const slot of slotGroup) {
+          // Check if slot has matching candidates
+          const hasCandidates = words.some(w => {
+            if (w.length !== slot.length) return false;
+            // Ensure matches prefilled cells
+            for (let idx = 0; idx < slot.cells.length; idx++) {
+              const cell = slot.cells[idx];
+              const prefilled = grid[cell.row]?.[cell.column];
+              if (prefilled && prefilled !== "" && prefilled !== "#" && w[idx] !== prefilled) {
+                return false;
+              }
+            }
+            return true;
+          });
+          if (hasCandidates) {
+            bestSlot = slot;
+            break;
+          }
+        }
+        if (!bestSlot) {
+          // default to diagonal-down-right or diagonal-down-left
+          bestSlot = slotGroup.find(s => s.direction === "diagonal-down-right" || s.direction === "diagonal-down-left") || slotGroup[0];
+        }
+        filteredSlots.push(bestSlot);
+      }
+    });
+    return filteredSlots;
+  }, [grid, diagonalEnabled, words]);
+
+  const acrossSlots = useMemo(() => detectedSlots.filter(s => s.direction === "across"), [detectedSlots]);
+  const downSlots = useMemo(() => detectedSlots.filter(s => s.direction === "down"), [detectedSlots]);
+  const ddrSlots = useMemo(() => detectedSlots.filter(s => s.direction === "diagonal-down-right"), [detectedSlots]);
+  const ddlSlots = useMemo(() => detectedSlots.filter(s => s.direction === "diagonal-down-left"), [detectedSlots]);
+  const durSlots = useMemo(() => detectedSlots.filter(s => s.direction === "diagonal-up-right"), [detectedSlots]);
+  const dulSlots = useMemo(() => detectedSlots.filter(s => s.direction === "diagonal-up-left"), [detectedSlots]);
+
+  const diagonalCells = useMemo(() => {
+    const ddr = new Set<string>();
+    const ddl = new Set<string>();
+    const dur = new Set<string>();
+    const dul = new Set<string>();
+    detectedSlots.forEach(s => {
+      if (s.direction === "diagonal-down-right") {
+        s.cells.forEach((c: Position) => ddr.add(`${c.row},${c.column}`));
+      } else if (s.direction === "diagonal-down-left") {
+        s.cells.forEach((c: Position) => ddl.add(`${c.row},${c.column}`));
+      } else if (s.direction === "diagonal-up-right") {
+        s.cells.forEach((c: Position) => dur.add(`${c.row},${c.column}`));
+      } else if (s.direction === "diagonal-up-left") {
+        s.cells.forEach((c: Position) => dul.add(`${c.row},${c.column}`));
+      }
+    });
+    return { ddr, ddl, dur, dul };
+  }, [detectedSlots]);
+
+  const getWordAtSlot = (targetGrid: Grid, slot: any): string => {
+    return slot.cells.map((cell: Position) => targetGrid[cell.row]?.[cell.column] || "_").join("");
+  };
+
+  const filteredPuzzles = useMemo(() => {
+    if (predefinedTheme === "All") return puzzles;
+    return puzzles.filter(p => p.theme === predefinedTheme);
+  }, [puzzles, predefinedTheme]);
+
+  useEffect(() => {
+    if (view === "permanent" && filteredPuzzles.length > 0) {
+      const alreadySelected = filteredPuzzles.find(p => p.id === selectedId);
+      if (!alreadySelected) {
+        loadPuzzle(filteredPuzzles[0]);
+      }
+    }
+  }, [predefinedTheme, filteredPuzzles, view, selectedId]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -231,15 +512,6 @@ export function App() {
     }
   };
 
-  const words = useMemo(
-    () =>
-      wordsText
-        .split(/[\s,]+/)
-        .map((word) => word.trim().toUpperCase())
-        .filter(Boolean),
-    [wordsText],
-  );
-
   const activeStep = result?.steps[stepIndex];
   const playbackGrid = useMemo(() => {
     if (!result) return null;
@@ -251,12 +523,12 @@ export function App() {
   }, [grid, result, stepIndex]);
   const displayedGrid = playbackGrid ?? grid;
 
-  const autoCompare = async (targetGrid: Grid, targetWords: string[]) => {
+  const autoCompare = async (targetGrid: Grid, targetWords: string[], targetDiagonal: boolean = diagonalEnabled) => {
     if (targetGrid.length === 0 || targetWords.length === 0) return;
     try {
       const comparisonData = await api<Comparison[]>("/api/compare", {
         method: "POST",
-        body: JSON.stringify({ grid: targetGrid, words: targetWords }),
+        body: JSON.stringify({ grid: targetGrid, words: targetWords, diagonal: targetDiagonal }),
       });
       setComparison(comparisonData);
     } catch (caught) {
@@ -266,13 +538,28 @@ export function App() {
 
   const loadPuzzle = (puzzle: Puzzle) => {
     setSelectedId(puzzle.id);
+    setCurrentPuzzle(puzzle);
     setGrid(cloneGrid(puzzle.grid));
     setWordsText(puzzle.words.join("\n"));
     setResult(null);
     setComparison([]);
     setStepIndex(0);
     setError("");
-    autoCompare(puzzle.grid, puzzle.words);
+    setShowRejected(false);
+    autoCompare(puzzle.grid, puzzle.words, diagonalEnabled);
+  };
+
+  const resetGrid = () => {
+    if (currentPuzzle) {
+      setGrid(cloneGrid(currentPuzzle.grid));
+      setWordsText(currentPuzzle.words.join("\n"));
+    } else {
+      initializeBlankGrid(grid.length);
+    }
+    setResult(null);
+    setStepIndex(0);
+    setError("");
+    setShowRejected(false);
   };
 
   useEffect(() => {
@@ -283,6 +570,18 @@ export function App() {
       })
       .catch((caught: Error) => setError(caught.message));
   }, []);
+
+  useEffect(() => {
+    if (view === "generated") {
+      if (lastGeneratedPuzzle) {
+        if (selectedId !== lastGeneratedPuzzle.id) {
+          loadPuzzle(lastGeneratedPuzzle);
+        }
+      } else {
+        generate();
+      }
+    }
+  }, [view, lastGeneratedPuzzle, selectedId]);
 
   // Keyboard shortcut listener
   useEffect(() => {
@@ -304,7 +603,8 @@ export function App() {
         setView("generated");
       } else if (event.key === "4") {
         setView("manual");
-        setGrid(prev => prev.length === 0 ? Array.from({ length: 10 }, () => Array(10).fill("")) : prev);
+        setSelectedId("manual");
+        initializeBlankGrid(10);
       } else if (event.key === "5") {
         setView("about");
       }
@@ -317,10 +617,11 @@ export function App() {
   const solve = async () => {
     setBusy("solve");
     setError("");
+    setShowRejected(false);
     try {
       const solved = await api<SolveResult>("/api/solve", {
         method: "POST",
-        body: JSON.stringify({ grid, words, algorithm }),
+        body: JSON.stringify({ grid, words, algorithm, diagonal: diagonalEnabled }),
       });
       setResult(solved);
       setStepIndex(Math.max(0, solved.steps.length - 1));
@@ -338,7 +639,7 @@ export function App() {
       setComparison(
         await api<Comparison[]>("/api/compare", {
           method: "POST",
-          body: JSON.stringify({ grid, words }),
+          body: JSON.stringify({ grid, words, diagonal: diagonalEnabled }),
         }),
       );
     } catch (caught) {
@@ -353,8 +654,9 @@ export function App() {
     setError("");
     try {
       const generated = await api<Puzzle>(
-        `/api/generate?difficulty=${difficulty}&size=${genSize}&seed=${Date.now()}`,
+        `/api/generate?difficulty=${difficulty}&size=${genSize}&seed=${Date.now()}&theme=${encodeURIComponent(genTheme)}`,
       );
+      setLastGeneratedPuzzle(generated);
       loadPuzzle(generated);
       setView("generated");
     } catch (caught) {
@@ -369,6 +671,7 @@ export function App() {
     next[row]![column] = value.replace(/[^a-z]/gi, "").slice(-1).toUpperCase();
     setGrid(next);
     setResult(null);
+    setComparison([]);
   };
 
   const toggleBlock = (row: number, column: number) => {
@@ -377,6 +680,7 @@ export function App() {
     next[row]![column] = next[row]![column] === "#" ? "" : "#";
     setGrid(next);
     setResult(null);
+    setComparison([]);
   };
 
   // Shared component for the main solver panel
@@ -419,8 +723,19 @@ export function App() {
                         ? "4px"
                         : undefined,
                 };
-                return row.map((cell, columnIndex) =>
-                  cell === "#" ? (
+                return row.map((cell, columnIndex) => {
+                  const coord = `${rowIndex},${columnIndex}`;
+                  const isDDR = diagonalCells.ddr.has(coord);
+                  const isDDL = diagonalCells.ddl.has(coord);
+                  const isDUR = diagonalCells.dur.has(coord);
+                  const isDUL = diagonalCells.dul.has(coord);
+                  const diagClasses = [
+                    isDDR ? "diag-dr" : "",
+                    isDDL ? "diag-dl" : "",
+                    isDUR ? "diag-ur" : "",
+                    isDUL ? "diag-ul" : ""
+                  ].filter(Boolean).join(" ");
+                  return cell === "#" ? (
                     <button
                       className="cell blocked"
                       key={`${rowIndex}-${columnIndex}`}
@@ -430,7 +745,7 @@ export function App() {
                     />
                   ) : (
                     <input
-                      className={`cell ${activeStep?.grid ? "playback" : ""}`}
+                      className={`cell ${activeStep?.grid ? "playback" : ""} ${diagClasses}`}
                       key={`${rowIndex}-${columnIndex}`}
                       value={cell}
                       maxLength={1}
@@ -442,8 +757,8 @@ export function App() {
                       style={cellStyle}
                       aria-label={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
                     />
-                  ),
-                );
+                  );
+                });
               })}
             </div>
             <p className="grid-hint">
@@ -453,6 +768,97 @@ export function App() {
                 ⚠️ Custom blocks change slot lengths. Add matching candidate words to avoid "No solution"!
               </small>
             </p>
+          </div>
+
+          <div className="slots-panel">
+            <p className="eyebrow" style={{ margin: "0 0 6px 0" }}>Word slots</p>
+            <h3 style={{ margin: "0 0 12px 0", fontSize: "1.1rem" }}>Detected ({detectedSlots.length})</h3>
+            <div className="slots-scroll" style={{ maxHeight: "360px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px" }}>
+              {acrossSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#cc7a39", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>Across</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {acrossSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f4f4f0", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#35413b" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {downSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#cc7a39", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>Down</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {downSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f4f4f0", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#35413b" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {ddrSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#b85f30", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>↘ Diagonal Down-Right</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {ddrSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f4f4f0", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#35413b" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {ddlSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#b85f30", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>↙ Diagonal Down-Left</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {ddlSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f4f4f0", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#35413b" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {durSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#4878d2", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>↗ Diagonal Up-Right</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {durSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f0f4fc", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#2a4a8c" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dulSlots.length > 0 && (
+                <div className="slot-group">
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#148c6e", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid #e5e5df", paddingBottom: "3px" }}>↖ Diagonal Up-Left</h4>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {dulSlots.map(s => (
+                      <li key={s.id} className="slot-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "#f0faf6", borderRadius: "6px", fontSize: "0.82rem" }}>
+                        <span className="slot-id" style={{ fontFamily: "monospace", fontWeight: 700, color: "#0f5e49" }}>{s.id}</span>
+                        <span className="slot-len" style={{ color: "#7a817e", fontSize: "0.76rem" }}>len {s.length}</span>
+                        <span className="slot-word" style={{ fontWeight: 800, color: "#1e3f24", letterSpacing: "0.05em" }}>{getWordAtSlot(displayedGrid, s)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="controls">
@@ -474,6 +880,19 @@ export function App() {
             <p className="algorithm-note">
               {algorithmDetails[algorithm].description}
             </p>
+            <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "8px", margin: "4px 0 10px 0", cursor: "pointer", fontWeight: "600" }}>
+              <input
+                type="checkbox"
+                checked={diagonalEnabled}
+                onChange={(event) => {
+                  const val = event.target.checked;
+                  setDiagonalEnabled(val);
+                  setResult(null);
+                  autoCompare(grid, words, val);
+                }}
+              />
+              <span>Enable Diagonal Entries</span>
+            </label>
             <label>
               Candidate words <span>{words.length}</span>
               <textarea
@@ -490,6 +909,9 @@ export function App() {
               </button>
               <button onClick={compare} disabled={Boolean(busy)}>
                 {busy === "compare" ? "Comparing..." : "Compare all"}
+              </button>
+              <button onClick={resetGrid} style={{ background: "#fdf8f4", border: "1px solid #e2c0b0", color: "#8a4f2b" }}>
+                Reset Grid
               </button>
             </div>
           </div>
@@ -541,12 +963,25 @@ export function App() {
 
           <p className="eyebrow" style={{ marginTop: "18px", marginBottom: "6px" }}>Recent Event Log Feed</p>
           <div className="trace-feed">
-            {result.steps.slice(0, stepIndex + 1).slice(-5).map((step, idx) => (
-              <div className={`feed-item ${step.type}`} key={idx}>
-                <div className="type">{step.type.replaceAll("_", " ")}</div>
-                <div className="msg">{step.message}</div>
-              </div>
-            ))}
+            {result.steps.slice(0, stepIndex + 1).slice(-6).map((step, idx, arr) => {
+              const isLast = idx === arr.length - 1;
+              const fcRemovals = step.type === "FORWARD_CHECK" ? step.removedCandidates ?? 0 : 0;
+              return (
+                <div
+                  className={`feed-item ${step.type}${step.type === "FORWARD_CHECK" && fcRemovals > 0 ? " fc-active" : ""}`}
+                  key={idx}
+                  style={isLast ? { outline: "2px solid #3d8064", outlineOffset: "-2px" } : {}}
+                >
+                  <div className="type">{step.type.replaceAll("_", " ")}{isLast ? " ←" : ""}</div>
+                  <div className="msg">
+                    {step.message}
+                    {step.type === "FORWARD_CHECK" && fcRemovals > 0 && (
+                      <strong style={{ marginLeft: 6, color: "#4b30a0" }}>(−{fcRemovals} pruned)</strong>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <div className="step-buttons">
@@ -581,6 +1016,56 @@ export function App() {
             <Metric label="Pruned branches" value={result.statistics.prunedBranches} />
             <Metric label="Backtracks" value={result.statistics.backtracks} />
             <Metric label="Initial search" value={result.statistics.initialSearchSpace} />
+          </div>
+          {/* Always-visible Rejected Words Panel */}
+          <div style={{ marginTop: "18px", borderTop: "1px solid #e5e5df", paddingTop: "14px" }}>
+            <button
+              onClick={() => setShowRejected(!showRejected)}
+              disabled={rejectedAssignments.length === 0}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                fontSize: "0.85rem",
+                background: rejectedAssignments.length > 0 ? (showRejected ? "#fdf5f0" : "#fcfcf9") : "#f5f5f2",
+                border: `1px solid ${rejectedAssignments.length > 0 ? "#d4a890" : "#d8d9d1"}`,
+                borderRadius: "10px",
+                fontWeight: "700",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "6px",
+                opacity: rejectedAssignments.length === 0 ? 0.55 : 1,
+                cursor: rejectedAssignments.length === 0 ? "not-allowed" : "pointer"
+              }}
+            >
+              <span>🚫 Rejected Words at Step {stepIndex + 1}</span>
+              <span style={{
+                padding: "2px 8px",
+                borderRadius: "999px",
+                background: rejectedAssignments.length > 0 ? "#f7e0d6" : "#ecece5",
+                color: rejectedAssignments.length > 0 ? "#b85f30" : "#7a817e",
+                fontSize: "0.78rem",
+                fontWeight: 800
+              }}>
+                {rejectedAssignments.length} {showRejected ? "▲" : "▼"}
+              </span>
+            </button>
+            {showRejected && rejectedAssignments.length > 0 && (
+              <div style={{ marginTop: "10px", maxHeight: "180px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", padding: "10px 12px", background: "#fdf8f4", border: "1px solid #e2c0b0", borderRadius: "10px" }}>
+                {rejectedAssignments.map((item, idx) => (
+                  <div key={idx} style={{ fontSize: "0.8rem", display: "flex", flexDirection: "column", borderBottom: idx < rejectedAssignments.length - 1 ? "1px solid #e2c0b0" : "none", paddingBottom: idx < rejectedAssignments.length - 1 ? "6px" : "0", marginBottom: idx < rejectedAssignments.length - 1 ? "6px" : "0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <strong style={{ color: "#b85f30", textTransform: "uppercase", letterSpacing: "0.06em" }}>{item.word}</strong>
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <span style={{ fontFamily: "monospace", color: "#656e69", fontSize: "0.75rem", fontWeight: 700, background: "#f0ede8", padding: "1px 6px", borderRadius: 4 }}>{item.slotId}</span>
+                        <span style={{ fontSize: "0.7rem", color: item.type === "BACKTRACK" ? "#8b382b" : "#7a817e", fontWeight: 700, textTransform: "uppercase" }}>{item.type.replace("_", " ")}</span>
+                      </span>
+                    </div>
+                    <span style={{ color: "#7c8581", fontSize: "0.76rem", marginTop: "3px", lineHeight: "1.4" }}>{item.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -654,12 +1139,7 @@ export function App() {
           </button>
           <button
             className={`nav-link ${view === "generated" ? "active" : ""}`}
-            onClick={() => {
-              setView("generated");
-              if (!selectedId.startsWith("generated-")) {
-                generate();
-              }
-            }}
+            onClick={() => setView("generated")}
           >
             Dynamic Generator <span className="shortcut-badge">3</span>
           </button>
@@ -721,12 +1201,7 @@ export function App() {
               </div>
             </div>
 
-            <div className="card nav-card" onClick={() => {
-              setView("generated");
-              if (!selectedId.startsWith("generated-")) {
-                generate();
-              }
-            }}>
+            <div className="card nav-card" onClick={() => setView("generated")}>
               <div className="icon">⚙️</div>
               <h3>Dynamic Generator</h3>
               <p>
@@ -782,10 +1257,22 @@ export function App() {
                 <p className="eyebrow">Puzzle library</p>
                 <h2>Select Predefined Puzzle</h2>
               </div>
-              <span className="count">{puzzles.length}</span>
+              <span className="count">{filteredPuzzles.length}</span>
+            </div>
+            <div className="theme-filter" style={{ marginTop: "16px", borderBottom: "1px solid #e5e5df", paddingBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "6px", fontWeight: "bold", fontSize: "0.85rem", color: "#4c5651" }}>Theme Filter</label>
+              <select
+                value={predefinedTheme}
+                onChange={(event) => setPredefinedTheme(event.target.value)}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1px solid #d7d8cf", background: "#f7f6f0" }}
+              >
+                <option value="All">All Themes</option>
+                <option value="DAA Syllabus">DAA Syllabus</option>
+                <option value="General CS">General CS</option>
+              </select>
             </div>
             <div className="puzzle-list">
-              {puzzles.map((puzzle) => (
+              {filteredPuzzles.map((puzzle) => (
                 <button
                   className={`puzzle-item ${selectedId === puzzle.id ? "active" : ""}`}
                   key={puzzle.id}
@@ -824,26 +1311,36 @@ export function App() {
             <div className="generator" style={{ borderTop: "none", marginTop: 0, paddingTop: 0 }}>
               <p className="eyebrow">Automatic generator</p>
               <div className="generator-row" style={{ flexDirection: "column", gap: "8px" }}>
-                <div style={{ display: "flex", gap: "9px" }}>
+                <div style={{ display: "flex", gap: "9px", flexDirection: "column" }}>
+                  <div style={{ display: "flex", gap: "9px" }}>
+                    <select
+                      value={difficulty}
+                      onChange={(event) =>
+                        setDifficulty(event.target.value as Puzzle["difficulty"])
+                      }
+                      style={{ flex: 1 }}
+                    >
+                      <option>Easy</option>
+                      <option>Medium</option>
+                      <option>Hard</option>
+                    </select>
+                    <select
+                      value={genSize}
+                      onChange={(event) => setGenSize(Number(event.target.value))}
+                      style={{ flex: 1 }}
+                    >
+                      <option value={5}>5x5 Grid</option>
+                      <option value={10}>10x10 Grid</option>
+                      <option value={15}>15x15 Grid</option>
+                    </select>
+                  </div>
                   <select
-                    value={difficulty}
-                    onChange={(event) =>
-                      setDifficulty(event.target.value as Puzzle["difficulty"])
-                    }
-                    style={{ flex: 1 }}
+                    value={genTheme}
+                    onChange={(event) => setGenTheme(event.target.value)}
+                    style={{ width: "100%" }}
                   >
-                    <option>Easy</option>
-                    <option>Medium</option>
-                    <option>Hard</option>
-                  </select>
-                  <select
-                    value={genSize}
-                    onChange={(event) => setGenSize(Number(event.target.value))}
-                    style={{ flex: 1 }}
-                  >
-                    <option value={5}>5x5 Grid</option>
-                    <option value={10}>10x10 Grid</option>
-                    <option value={15}>15x15 Grid</option>
+                    <option value="General CS">General CS Theme</option>
+                    <option value="DAA Syllabus">DAA Syllabus Theme</option>
                   </select>
                 </div>
                 <button
